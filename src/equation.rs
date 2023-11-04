@@ -104,7 +104,7 @@ impl Solver {
     }
 }
 
-fn is_const_term(i: &ResultExpr) -> Option<char> {
+pub fn is_const_term(i: &ResultExpr) -> Option<char> {
     match i {
         ResultExpr::Number(_)   => None,
         ResultExpr::Variable(c) => Some(*c),

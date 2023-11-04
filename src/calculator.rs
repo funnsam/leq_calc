@@ -56,8 +56,8 @@ impl ResultExpr {
     pub fn evaluate(&self) -> Fraction {
         match self {
             Self::Number(Number::Rational(n)) => n.clone(),
-            Self::Operation(Operator::UnaryAdd, ops) => ops[0].evaluate().abs(),
-            Self::Operation(Operator::UnarySubtract, ops) => -ops[0].evaluate().abs(),
+            Self::Operation(Operator::UnaryAdd, ops) => ops[0].evaluate(),
+            Self::Operation(Operator::UnarySubtract, ops) => -ops[0].evaluate(),
             Self::Operation(Operator::Add, ops) => ops.iter().fold(Fraction::from(0), |acc, expr| acc + expr.evaluate()),
             Self::Operation(Operator::Subtract, ops) => ops.iter().fold(Fraction::from(0), |acc, expr| acc - expr.evaluate()),
             Self::Operation(Operator::Multiply, ops) => ops.iter().fold(Fraction::from(1), |acc, expr| acc * expr.evaluate()),
@@ -69,7 +69,7 @@ impl ResultExpr {
 
                 acc
             },
-            _ => todo!(),
+            _ => todo!("{self:?}"),
         }
     }
 
@@ -82,9 +82,24 @@ impl ResultExpr {
             Self::Operation(Operator::Add, ops) => ops.iter().fold(Fraction::from(0), |acc, this| acc + this.get_unknown_multiple(true)),
             Self::Operation(Operator::Subtract, ops) => ops.iter().fold(Fraction::from(0), |acc, this| acc - this.get_unknown_multiple(true)),
             Self::Operation(Operator::Multiply, ops) => ops.iter().fold(Fraction::from(1), |acc, this| acc * this.get_unknown_multiple(true)),
-            Self::Operation(Operator::Divide, ops) => ops.iter().fold(Fraction::from(1), |acc, this| acc / this.get_unknown_multiple(true)),
+            Self::Operation(Operator::Divide, ops) => {
+                let mut acc = ops[0].get_unknown_multiple(sign);
+                for i in ops.iter().skip(1) {
+                    acc /= i.get_unknown_multiple(sign);
+                }
+
+                acc
+            },
             _ => todo!()
         }) * sign.then_some(1).unwrap_or(-1)
+    }
+
+    pub fn contains_division(&self) -> bool {
+        match self {
+            Self::Operation(Operator::Divide, _) => true,
+            Self::Operation(_, ops) => ops.iter().fold(false, |acc, el| acc | el.contains_division()),
+            _ => false
+        }
     }
 }
 
@@ -450,36 +465,45 @@ pub fn seperate_terms(tree: &ResultExpr, terms: &mut Vec<ResultExpr>, sign: bool
 
 fn distributive_law(term: ResultExpr, sign: bool) -> Vec<ResultExpr> {
     match term {
-        ResultExpr::Operation(Operator::Multiply, ref ops) => {
-            match &ops[1] {
-                ResultExpr::Operation(op, _ops) => {
-                    if matches!(op, Operator::Add | Operator::Subtract) {
-                        let mut lhs = Vec::new();
-                        let mut rhs = Vec::new();
-                        seperate_terms(&_ops[0], &mut lhs, true);
-                        seperate_terms(&_ops[1], &mut rhs, matches!(op, Operator::Add));
-                        for i in lhs.iter_mut() {
-                            *i = ResultExpr::Operation(Operator::Multiply, vec![ResultExpr::Operation(sign_to_op!(sign), vec![ops[0].clone()]), i.clone()])
-                        }
-                        for i in rhs.iter_mut() {
-                            *i = ResultExpr::Operation(Operator::Multiply, vec![ResultExpr::Operation(sign_to_op!(sign), vec![ops[0].clone()]), i.clone()])
-                        }
+        ResultExpr::Operation(ref op, ref ops) => {
+            if matches!(op, Operator::Multiply | Operator::Divide) {
+                let is_rhs = super::equation::is_const_term(&ops[1]).is_some();
+                match &ops[is_rhs as usize] {
+                    ResultExpr::Operation(_op, _ops) => {
+                        if matches!(_op, Operator::Add | Operator::Subtract) {
+                            let mut lhs = Vec::new();
+                            let mut rhs = Vec::new();
+                            seperate_terms(&_ops[0], &mut lhs, true);
+                            seperate_terms(&_ops[1], &mut rhs, matches!(_op, Operator::Add));
+                            for i in lhs.iter_mut() {
+                                let mut iops = vec![ResultExpr::Operation(sign_to_op!(sign), vec![ops[(!is_rhs) as usize].clone()]), i.clone()];
+                                if !is_rhs { iops.reverse() }
+                                *i = ResultExpr::Operation(op.clone(), iops)
+                            }
+                            for i in rhs.iter_mut() {
+                                let mut iops = vec![ResultExpr::Operation(sign_to_op!(sign), vec![ops[(!is_rhs) as usize].clone()]), i.clone()];
+                                if !is_rhs { iops.reverse() }
+                                *i = ResultExpr::Operation(op.clone(), iops)
+                            }
 
-                        lhs.append(&mut rhs);
-                        lhs
-                    } else if matches!(op, Operator::Multiply) {
-                        let mut terms = Vec::new();
-                        seperate_terms(&_ops[1], &mut terms, true);
-                        for i in terms.iter_mut() {
-                            *i = ResultExpr::Operation(Operator::Multiply, vec![ResultExpr::Operation(sign_to_op!(sign), vec![ops[0].clone()]), _ops[0].clone(), i.clone()])
-                        }
+                            lhs.append(&mut rhs);
+                            lhs
+                        } else if op == _op {
+                            let mut terms = Vec::new();
+                            seperate_terms(&_ops[1], &mut terms, true);
+                            for i in terms.iter_mut() {
+                                *i = ResultExpr::Operation(op.clone(), vec![ResultExpr::Operation(sign_to_op!(sign), vec![ops[(!is_rhs) as usize].clone()]), _ops[0].clone(), i.clone()])
+                            }
 
-                        terms
-                    } else {
-                        vec![ResultExpr::Operation(sign_to_op!(sign), vec![term])]
-                    }
-                },
-                _ => vec![ResultExpr::Operation(sign_to_op!(sign), vec![term])],
+                            terms
+                        } else {
+                            vec![ResultExpr::Operation(sign_to_op!(sign), vec![term])]
+                        }
+                    },
+                    _ => vec![ResultExpr::Operation(sign_to_op!(sign), vec![term])],
+                }
+            } else {
+                vec![ResultExpr::Operation(sign_to_op!(sign), vec![term])]
             }
         },
         _ => vec![ResultExpr::Operation(sign_to_op!(sign), vec![term])],
